@@ -3,6 +3,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace std;
 #define PI 3.14159265
@@ -57,7 +58,7 @@ Vector2 Rotate(const Vector2& v, float angle) {
 	return Vector2(v.x * cosAngle - v.y * sinAngle, v.y * cosAngle + v.x * sinAngle);
 }
 
-bool ShouldBoost(Vector2 podPos, Vector2 opponentPos, Vector2 nextCheckpointPos, bool isBoostAvailable, float minBoostRadius, float nextCheckpointAngle)
+bool ShouldBoost(const Vector2& podPos, const Vector2& opponentPos, const Vector2& nextCheckpointPos, const bool& isBoostAvailable, const float& minBoostRadius, const float& nextCheckpointAngle, const bool& is2ndLap)
 {
 	if (isBoostAvailable)
 	{
@@ -69,24 +70,59 @@ bool ShouldBoost(Vector2 podPos, Vector2 opponentPos, Vector2 nextCheckpointPos,
 		// IF opponent is far enough
 		// AND opponent is behind us (closer to checkpoint than pod)
 		// AND pod is heading straight to checkpoint
-		if (podToOpponentDistance >= minBoostRadius && podToCheckpointDistance > opponentToCheckpointDistance && nextCheckpointAngle == 0) //Check if distance is high enough to use boost and if opponent is closer to the next checkpoint
+		// AND race is at 2nd lap
+		if (podToOpponentDistance >= minBoostRadius && podToCheckpointDistance > opponentToCheckpointDistance && nextCheckpointAngle == 0 && is2ndLap)
 		{
 			return true;
 		}
 	}
 	return false;
 }
+
+void Check2ndLap(bool& _is2ndLap, const Vector2& nextCheckpointPosition, vector<Vector2>& _checkpointArray)
+{
+	if (_is2ndLap)
+		return;
+
+	Vector2 newCheckpoint(nextCheckpointPosition);
+
+	if (_checkpointArray.empty()) // means  race just started
+	{
+		_checkpointArray.push_back(newCheckpoint);
+	}
+	else if(_checkpointArray.back() != newCheckpoint) // new checkpoint is different from previous one in array
+	{
+		if (newCheckpoint == _checkpointArray.front()) // means 1st lap is over
+		{
+			_is2ndLap = true;
+		}
+		else
+			_checkpointArray.push_back(newCheckpoint);
+	}
+	return;
+}
+
+bool CollisionInNextTurn(Vector2 _futurePodPos, Vector2 _futureOpponentPos, float _fieldRadius)
+{
+}
+
 int main()
 {
 	const int LimitAngle = 90;
 	const int MinSteerAngle = 1;
 	const float MinBoostRadius = 2000;
-	const float forceFieldRadius = 400 + 75; // 400 + error margin
+	const float SlowDownRadius = 2000; 
+	const float forceFieldRadius = 400 + 10; // 400 + error margin
 	const int MaxTurnsMotorDisabled = 3;
 
+	vector<Vector2> checkpointArray;
+	bool is2ndLap = false;
 	bool isBoostAvailable = true;
 	bool isMotorInactive = false;
 	int turnsSinceMotorDisabled = 0;
+
+	Vector2 previousPodPos = Vector2(0, 0);
+	Vector2 previousOpponentPos = Vector2(0, 0);
 
     // game loop
     while (1) {
@@ -109,22 +145,36 @@ int main()
 		bool useBoost = false;
 		bool useShield = false;
 
+		Vector2 podVelocity = podPosition - previousPodPos / 1;		//t = 1 for one game turn
+		Vector2 opponentVelocity = opponentPosition - previousOpponentPos / 1;
+
+		float opponentThrust = Distance(opponentPosition, previousOpponentPos); // v = d/t;  here t=1 turn
+
+		cerr << "Opponent thrust = " << opponentThrust << endl;
+		Vector2 futurePodPos = podPosition + Normalize(podVelocity) * thrust;
+		Vector2 futureOpponentPos = opponentPosition + Normalize(opponentVelocity) * thrust;
+
 		if (nextCheckpointAngle <= -MinSteerAngle || nextCheckpointAngle >= MinSteerAngle)
 		{
 			// Seek correct target
-			Vector2 wantedDirection(nextCheckpointX - x, nextCheckpointY - y);
-			wantedDirection = Normalize(wantedDirection);
+			Vector2 wantedVelocity= nextCheckpointPosition - podPosition;
 
-			Vector2 currentDirection = Rotate(wantedDirection, -nextCheckpointAngle);
-			currentDirection = Normalize(currentDirection);
+			if (nextCheckpointDist < SlowDownRadius)
+			{
+				//Inside slowing radius
+				wantedVelocity = Normalize(wantedVelocity) * thrust * (nextCheckpointDist / SlowDownRadius);
+				cerr << "In Slowing radius" << endl;
+			}
+			else //Outside slowing radius
+			{
+				wantedVelocity = Normalize(wantedVelocity) * thrust;
+			}
 
-			Vector2 steeringDirection = wantedDirection - currentDirection;
-			steeringDirection = Normalize(steeringDirection) * 100;
+			Vector2 steeringVector = wantedVelocity - podVelocity;
+			nextCheckpointX += steeringVector.x;
+			nextCheckpointY += steeringVector.y;
 
-			nextCheckpointX += steeringDirection.x;
-			nextCheckpointY += steeringDirection.y;
-
-			// Thrusting down
+			// Thrusting down (angle condition )
 			if (nextCheckpointAngle <= -LimitAngle || nextCheckpointAngle >= LimitAngle)
 			{
 				thrust = 0;
@@ -132,8 +182,10 @@ int main()
 		}
 
 		// Handle boost
+		Check2ndLap(is2ndLap, nextCheckpointPosition, checkpointArray);
 		cerr << "Boost available : " << isBoostAvailable << endl;
-		if (ShouldBoost(podPosition, opponentPosition, nextCheckpointPosition, isBoostAvailable, MinBoostRadius, nextCheckpointAngle))
+		cerr << "2nd Lap ? " << is2ndLap << endl;
+		if (ShouldBoost(podPosition, opponentPosition, nextCheckpointPosition, isBoostAvailable, MinBoostRadius, nextCheckpointAngle, is2ndLap))
 		{
 			useBoost = true;
 			isBoostAvailable = false;
@@ -154,9 +206,8 @@ int main()
 				isMotorInactive = false;
 			}
 		}
-		float podToOpponentDist = Distance(podPosition, opponentPosition);
-		cerr << "Distance to opponent : " << podToOpponentDist << endl;
-		if (podToOpponentDist <= forceFieldRadius * 2 && !isMotorInactive)
+		// Opponent collision prediction
+		if (Distance(futurePodPos, futureOpponentPos) < forceFieldRadius)
 		{
 			cerr << "SHIELD ACTIVATED" << endl;
 			useShield = true;
@@ -171,5 +222,8 @@ int main()
 			cout << "SHIELD" << endl;
 		else
 			cout << thrust << endl;
+
+		previousPodPos = Vector2(x, y);
+		previousOpponentPos = Vector2(opponentX, opponentY);
     }
 }

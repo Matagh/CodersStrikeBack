@@ -112,7 +112,7 @@ int main()
 	const int MinSteerAngle = 1;
 	const float MinBoostRadius = 2000;
 	const float SlowDownRadius = 2000; 
-	const float forceFieldRadius = 400 + 10; // 400 + error margin
+	const float forceFieldRadius = 400 + 30; // 400 + error margin
 	const int MaxTurnsMotorDisabled = 3;
 
 	vector<Vector2> checkpointArray;
@@ -152,7 +152,7 @@ int main()
 
 		cerr << "Opponent thrust = " << opponentThrust << endl;
 		Vector2 futurePodPos = podPosition + Normalize(podVelocity) * thrust;
-		Vector2 futureOpponentPos = opponentPosition + Normalize(opponentVelocity) * thrust;
+		Vector2 futureOpponentPos = opponentPosition + opponentVelocity;
 
 		if (nextCheckpointAngle <= -MinSteerAngle || nextCheckpointAngle >= MinSteerAngle)
 		{
@@ -162,14 +162,16 @@ int main()
 			if (nextCheckpointDist < SlowDownRadius)
 			{
 				//Inside slowing radius
-				wantedVelocity = Normalize(wantedVelocity) * thrust * (nextCheckpointDist / SlowDownRadius);
+				thrust = thrust * (nextCheckpointDist / SlowDownRadius);
+				
 				cerr << "In Slowing radius" << endl;
 			}
 			else //Outside slowing radius
 			{
-				wantedVelocity = Normalize(wantedVelocity) * thrust;
+				thrust = 100;
 			}
-
+			
+			wantedVelocity = Normalize(wantedVelocity) * thrust;
 			Vector2 steeringVector = wantedVelocity - podVelocity;
 			nextCheckpointX += steeringVector.x;
 			nextCheckpointY += steeringVector.y;
@@ -193,25 +195,13 @@ int main()
 		}
 
 		// Handle Shield
-		if (isMotorInactive)
-		{
-			if (turnsSinceMotorDisabled < 3)
-			{
-				turnsSinceMotorDisabled++;
-				cerr << "Motor disable since " << turnsSinceMotorDisabled << " turns" << endl;
-			}
-			else
-			{
-				turnsSinceMotorDisabled = 0; // reset
-				isMotorInactive = false;
-			}
-		}
-		// Opponent collision prediction
-		if (Distance(futurePodPos, futureOpponentPos) < forceFieldRadius)
+		cerr << "Distance to opponent : " << Distance(podPosition, opponentPosition) << endl;
+		cerr << "Future distance to opponent : " << Distance(futurePodPos, futureOpponentPos) << endl;
+		if (Distance(futurePodPos, futureOpponentPos) < forceFieldRadius * 2)
 		{
 			cerr << "SHIELD ACTIVATED" << endl;
 			useShield = true;
-			isMotorInactive = true;
+			//isMotorInactive = true;
 		}
 
         // OUTPUT

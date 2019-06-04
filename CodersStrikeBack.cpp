@@ -3,7 +3,6 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 using namespace std;
 #define PI 3.14159265
@@ -16,14 +15,14 @@ struct Vector2
 	float x;
 	float y;
 
-	Vector2(float x, float y) : 
+	Vector2(float x, float y) :
 		x(x), y(y) {}
 
 	// Arithmetic operators
 	Vector2 operator + (const Vector2& v) const { return Vector2(x + v.x, y + v.y); }
-	Vector2 operator - (const Vector2& v) const	{ return Vector2(x - v.x, y - v.y); }
+	Vector2 operator - (const Vector2& v) const { return Vector2(x - v.x, y - v.y); }
 	Vector2 operator * (const float s) const { return Vector2(s*x, s*y); }
-	Vector2 operator * (const Vector2& v) const	{ return Vector2(x*v.x, y*v.y); }
+	Vector2 operator * (const Vector2& v) const { return Vector2(x*v.x, y*v.y); }
 	Vector2 operator / (const float s) const {
 		float r = 1 / s;
 		return *this * r;
@@ -58,162 +57,223 @@ Vector2 Rotate(const Vector2& v, float angle) {
 	return Vector2(v.x * cosAngle - v.y * sinAngle, v.y * cosAngle + v.x * sinAngle);
 }
 
-bool ShouldBoost(const Vector2& podPos, const Vector2& opponentPos, const Vector2& nextCheckpointPos, const bool& isBoostAvailable, const float& minBoostRadius, const float& nextCheckpointAngle, const bool& is2ndLap)
+class GameObject
 {
-	if (isBoostAvailable)
+public:
+	Vector2 position;
+	float radius;
+
+	GameObject(float _x, float _y, float _radius) : position(Vector2(_x, _y)), radius(_radius) {}
+	~GameObject(){}
+};
+
+class Checkpoint : public GameObject
+{
+public:
+	int id;
+
+	Checkpoint(int _id, float _x, float _y) : id(_id), GameObject(_x, _y, 600){}
+	~Checkpoint(){}
+
+};
+class Pod : GameObject
+{
+private:
+	const float slowingRadius = 2000;
+public:
+	Vector2 velocity;
+	int thrust = 100;
+	float angle;
+	int nextCheckpointId;
+	Pod* partnerPod;
+	bool haveShield = false;
+
+	Pod(float _x, float _y, float _vx, float _vy, float _angle, int _nextCheckpointId, Pod* _partner = nullptr) : GameObject(_x, _y, 400), velocity(Vector2(_vx, _vy)), angle(_angle), nextCheckpointId(_nextCheckpointId), partnerPod(_partner){}
+	~Pod() {}
+
+	float GetAngleToTarget(Vector2 _target)
 	{
+		float angleToTarget = atan2(_target.y, _target.x) - atan2(position.y, position.x);
+		angleToTarget = angleToTarget * 180 / PI; //convert radian to degree
 
-		float podToCheckpointDistance = Distance(podPos, nextCheckpointPos);
-		float opponentToCheckpointDistance = Distance(opponentPos, nextCheckpointPos);
-		float podToOpponentDistance = Distance(podPos, opponentPos);
-
-		// IF opponent is far enough
-		// AND opponent is behind us (closer to checkpoint than pod)
-		// AND pod is heading straight to checkpoint
-		// AND race is at 2nd lap
-		if (podToOpponentDistance >= minBoostRadius && podToCheckpointDistance > opponentToCheckpointDistance && nextCheckpointAngle == 0 && is2ndLap)
+		if (angleToTarget < 0)
 		{
-			return true;
+			angleToTarget = 360 - (-angleToTarget);
 		}
+		return angleToTarget;
 	}
-	return false;
-}
 
-void Check2ndLap(bool& _is2ndLap, const Vector2& nextCheckpointPosition, vector<Vector2>& _checkpointArray)
-{
-	if (_is2ndLap)
-		return;
-
-	Vector2 newCheckpoint(nextCheckpointPosition);
-
-	if (_checkpointArray.empty()) // means  race just started
+	float GetRotationAngle(Vector2 _target)
 	{
-		_checkpointArray.push_back(newCheckpoint);
+		float angleToTarget = GetAngleToTarget(_target);
+
+		// We need to know if we should turn clockwise or anticlockwise 
+		float clockwise, anticlockwise;
+		
+		clockwise = fmod(angleToTarget - this->angle, 360);
+		anticlockwise = fmod(this->angle - angleToTarget, 360);
+
+		if (clockwise < 0)
+			clockwise += 360;
+
+		if (anticlockwise < 0)
+			anticlockwise += 360;
+
+		// We keep the smallest angle
+		if (clockwise <= anticlockwise)
+			return clockwise;
+		else
+			return -anticlockwise; //negative angle to make pod rotate anticlockwise
+
 	}
-	else if(_checkpointArray.back() != newCheckpoint) // new checkpoint is different from previous one in array
+
+	void ApplyRotation(Vector2 _target)
 	{
-		if (newCheckpoint == _checkpointArray.front()) // means 1st lap is over
+		float rotationToAdd = GetRotationAngle(_target);
+
+		//We can rotate 18 degree per turn
+		if (rotationToAdd < -18)
+			rotationToAdd = -18;
+		else if (rotationToAdd > 18)
+			rotationToAdd = 18;
+
+		//Set new rotation
+		angle = fmod(angle + rotationToAdd, 360);
+		if (angle < 0)
+			angle += 360;
+	}
+
+	void ApplyThrust(int _thrust, Vector2 _target, vector<Checkpoint*> _checkPointArray)
+	{
+		if (haveShield) // can't thrust when shield activated
+			return;
+		
+		float nextCheckpointDist = Distance(this->position, _checkPointArray[nextCheckpointId]->position);
+
+		if (nextCheckpointDist <= slowingRadius) // Inside slowing radius
 		{
-			_is2ndLap = true;
+			thrust = thrust * (nextCheckpointDist / slowingRadius);
 		}
 		else
-			_checkpointArray.push_back(newCheckpoint);
-	}
-	return;
-}
+			thrust = 100;
 
-bool CollisionInNextTurn(Vector2 _futurePodPos, Vector2 _futureOpponentPos, float _fieldRadius)
-{
-}
+		Vector2 direction = _target - position;
+		velocity = velocity + Normalize(direction) * _thrust;
+	}
+
+	void ApplyMovement(Vector2 _target)
+	{
+		// Update position
+		position = position + velocity;
+
+		// TODO: handle collisions
+
+		// Friction
+		velocity = velocity * 0.85;
+
+		// Truncate speed
+		velocity.x = trunc(velocity.x);
+		velocity.y = trunc(velocity.y);
+
+		// Round position
+		position.x = round(position.x);
+		position.y = round(position.y);
+	}
+
+	void UpdateNextCheckpoint(vector<Checkpoint*> _checkPointArray)
+	{
+		Checkpoint* nextCheckpoint = _checkPointArray[nextCheckpointId];
+
+		if (Distance(nextCheckpoint->position, this->position) <= nextCheckpoint->radius)
+		{
+			nextCheckpointId = (nextCheckpointId + 1) % _checkPointArray.size();
+		}
+	}
+
+	void Play(vector<Checkpoint*> _checkpoints)
+	{
+		Vector2 target = _checkpoints[nextCheckpointId]->position;
+
+		ApplyRotation(target);
+		ApplyThrust(thrust, target, _checkpoints);
+		ApplyMovement(target);
+		UpdateNextCheckpoint(_checkpoints);
+	}
+
+	void Output(vector<Checkpoint*> _checkpoints)
+	{
+		cout << _checkpoints[nextCheckpointId]->position.x << " " << _checkpoints[nextCheckpointId]->position.y << " " << thrust << endl;
+	}
+};
+
 
 int main()
 {
-	const int LimitAngle = 90;
-	const int MinSteerAngle = 1;
-	const float MinBoostRadius = 2000;
-	const float SlowDownRadius = 2000; 
-	const float forceFieldRadius = 400 + 30; // 400 + error margin
-	const int MaxTurnsMotorDisabled = 3;
+    int laps;
+    cin >> laps; cin.ignore();
+    int checkpointCount;
+    cin >> checkpointCount; cin.ignore();
 
-	vector<Vector2> checkpointArray;
-	bool is2ndLap = false;
-	bool isBoostAvailable = true;
-	bool isMotorInactive = false;
-	int turnsSinceMotorDisabled = 0;
+	vector<Checkpoint*> checkPointArray;
+	Pod* pod1;
+	Pod* pod2;
+	Pod* opponent1;
+	Pod* opponent2;
 
-	Vector2 previousPodPos = Vector2(0, 0);
-	Vector2 previousOpponentPos = Vector2(0, 0);
+    for (int i = 0; i < checkpointCount; i++) {
+        int checkpointX;
+        int checkpointY;
+        cin >> checkpointX >> checkpointY; cin.ignore();
+		checkPointArray.push_back(new Checkpoint(i, checkpointX, checkpointY));
+    }
 
     // game loop
     while (1) {
-        int x;
-        int y;
-        int nextCheckpointX; // x position of the next check point
-        int nextCheckpointY; // y position of the next check point
-        int nextCheckpointDist; // distance to the next checkpoint
-        int nextCheckpointAngle; // angle between your pod orientation and the direction of the next checkpoint
-        cin >> x >> y >> nextCheckpointX >> nextCheckpointY >> nextCheckpointDist >> nextCheckpointAngle; cin.ignore();
-        int opponentX;
-        int opponentY;
-        cin >> opponentX >> opponentY; cin.ignore();
+        for (int i = 0; i < 2; i++) {
+            int x; // x position of your pod
+            int y; // y position of your pod
+            int vx; // x speed of your pod
+            int vy; // y speed of your pod
+            int angle; // angle of your pod
+            int nextCheckPointId; // next check point id of your pod
+            cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
 
-		Vector2 podPosition = Vector2(x, y);
-		Vector2 opponentPosition = Vector2(opponentX, opponentY);
-		Vector2 nextCheckpointPosition = Vector2(nextCheckpointX, nextCheckpointY);
+			if (i == 0)
+				pod1 = new Pod(x, y, vx, vy, angle, nextCheckPointId, pod2);
+			else
+				pod2 = new Pod(x, y, vx, vy, angle, nextCheckPointId, pod1);
+        }
+        for (int i = 0; i < 2; i++) {
+            int x2; // x position of the opponent's pod
+            int y2; // y position of the opponent's pod
+            int vx2; // x speed of the opponent's pod
+            int vy2; // y speed of the opponent's pod
+            int angle2; // angle of the opponent's pod
+            int nextCheckPointId2; // next check point id of the opponent's pod
+            cin >> x2 >> y2 >> vx2 >> vy2 >> angle2 >> nextCheckPointId2; cin.ignore();
 
-		int thrust = 100;
-		bool useBoost = false;
-		bool useShield = false;
+			if(i==0)
+				opponent1 = new Pod(x2, y2, vx2, vy2, angle2, nextCheckPointId2, opponent2);
+			else
+				opponent2 = new Pod(x2, y2, vx2, vy2, angle2, nextCheckPointId2, opponent1);
+        }
 
-		Vector2 podVelocity = podPosition - previousPodPos / 1;		//t = 1 for one game turn
-		Vector2 opponentVelocity = opponentPosition - previousOpponentPos / 1;
+        // Write an action using cout. DON'T FORGET THE "<< endl"
+        // To debug: cerr << "Debug messages..." << endl;
 
-		float opponentThrust = Distance(opponentPosition, previousOpponentPos); // v = d/t;  here t=1 turn
 
-		cerr << "Opponent thrust = " << opponentThrust << endl;
-		Vector2 futurePodPos = podPosition + Normalize(podVelocity) * thrust;
-		Vector2 futureOpponentPos = opponentPosition + opponentVelocity;
+        // You have to output the target position
+        // followed by the power (0 <= thrust <= 100)
+        // i.e.: "x y thrust"
+        //cout << "8000 4500 100" << endl;
+        //cout << "8000 4500 100" << endl;
+		pod1->Play(checkPointArray);
+		pod2->Play(checkPointArray);
 
-		if (nextCheckpointAngle <= -MinSteerAngle || nextCheckpointAngle >= MinSteerAngle)
-		{
-			// Seek correct target
-			Vector2 wantedVelocity= nextCheckpointPosition - podPosition;
+		pod1->Output(checkPointArray);
+		pod2->Output(checkPointArray);
 
-			if (nextCheckpointDist < SlowDownRadius)
-			{
-				//Inside slowing radius
-				thrust = thrust * (nextCheckpointDist / SlowDownRadius);
-				
-				cerr << "In Slowing radius" << endl;
-			}
-			else //Outside slowing radius
-			{
-				thrust = 100;
-			}
-			
-			wantedVelocity = Normalize(wantedVelocity) * thrust;
-			Vector2 steeringVector = wantedVelocity - podVelocity;
-			nextCheckpointX += steeringVector.x;
-			nextCheckpointY += steeringVector.y;
-
-			// Thrusting down (angle condition )
-			if (nextCheckpointAngle <= -LimitAngle || nextCheckpointAngle >= LimitAngle)
-			{
-				thrust = 0;
-			}
-		}
-
-		// Handle boost
-		Check2ndLap(is2ndLap, nextCheckpointPosition, checkpointArray);
-		cerr << "Boost available : " << isBoostAvailable << endl;
-		cerr << "2nd Lap ? " << is2ndLap << endl;
-		if (ShouldBoost(podPosition, opponentPosition, nextCheckpointPosition, isBoostAvailable, MinBoostRadius, nextCheckpointAngle, is2ndLap))
-		{
-			useBoost = true;
-			isBoostAvailable = false;
-			cerr << "BOOST ACTIVTED" << endl;
-		}
-
-		// Handle Shield
-		cerr << "Distance to opponent : " << Distance(podPosition, opponentPosition) << endl;
-		cerr << "Future distance to opponent : " << Distance(futurePodPos, futureOpponentPos) << endl;
-		if (Distance(futurePodPos, futureOpponentPos) < forceFieldRadius * 2)
-		{
-			cerr << "SHIELD ACTIVATED" << endl;
-			useShield = true;
-			//isMotorInactive = true;
-		}
-
-        // OUTPUT
-		cout << nextCheckpointX << " " << nextCheckpointY << " ";
-		if (useBoost)
-			cout << "BOOST" << endl;
-		else if (useShield)
-			cout << "SHIELD" << endl;
-		else
-			cout << thrust << endl;
-
-		previousPodPos = Vector2(x, y);
-		previousOpponentPos = Vector2(opponentX, opponentY);
+		delete pod1;
+		delete pod2;
     }
 }

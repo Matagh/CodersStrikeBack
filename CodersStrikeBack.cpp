@@ -205,10 +205,11 @@ public:
 	bool CheckCollisionWithPod(Pod* _otherPod)
 	{
 		float distance = Distance(this->position, _otherPod->position);
-		float collisionRadius = this->radius + _otherPod->radius +30;
+		float collisionRadius = this->radius + _otherPod->radius +30; //30 = margin error
 
 		if (distance <= collisionRadius) //means they are currently colliding;
 		{
+			cerr << "Yes there is collision !" << endl;
 			return true;
 		}
 
@@ -216,6 +217,7 @@ public:
 
 	void ApplyBounce(Pod* _otherPod)
 	{
+		cerr << "Bounce !" << endl;
 		float m1 = this->haveShield ? 10 : 1; // mass of thi pod
 		float m2 = _otherPod->haveShield ? 10 : 1; // mass of other pod
 
@@ -253,11 +255,11 @@ public:
 			if (CheckCollisionWithPod(_allPods[i]))
 			{
 				cerr << "Collision with other pod !" << endl;
-				//if (i >= 2) // means collision with opponent
-				//{
-				//	cerr << "Collision with opponent !" << endl;
-				//	this->haveShield = true;
-				//}
+				if (i >= 2) // means collision with opponent
+				{
+					cerr << "Collision with opponent !" << endl;
+					this->haveShield = true;
+				}
 				ApplyBounce(_allPods[i]);
 			}
 		}

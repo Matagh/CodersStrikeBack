@@ -49,13 +49,6 @@ Vector2 Normalize(const Vector2& v) {
 	return v / Length(v);
 }
 
-Vector2 Rotate(const Vector2& v, float angle) {
-	float rad = angle * PI / 180;
-	double cosAngle = cos(rad);
-	double sinAngle = sin(rad);
-
-	return Vector2(v.x * cosAngle - v.y * sinAngle, v.y * cosAngle + v.x * sinAngle);
-}
 
 class GameObject
 {
@@ -85,10 +78,9 @@ public:
 	int thrust = 100;
 	float angle;
 	int nextCheckpointId;
-	Pod* partnerPod;
 	bool haveShield = false;
 
-	Pod(float _x, float _y, float _vx, float _vy, float _angle, int _nextCheckpointId, Pod* _partner = nullptr) : GameObject(_x, _y, 400), velocity(Vector2(_vx, _vy)), angle(_angle), nextCheckpointId(_nextCheckpointId), partnerPod(_partner){}
+	Pod(float _x, float _y, float _vx, float _vy, float _angle, int _nextCheckpointId) : GameObject(_x, _y, 400), velocity(Vector2(_vx, _vy)), angle(_angle), nextCheckpointId(_nextCheckpointId){}
 	~Pod() {}
 
 	float GetAngleToTarget(Vector2 _target)
@@ -190,19 +182,104 @@ public:
 		}
 	}
 
-	void Play(vector<Checkpoint*> _checkpoints)
+	void Play(vector<Checkpoint*> _checkpoints, vector<Pod*> _allPods)
 	{
 		Vector2 target = _checkpoints[nextCheckpointId]->position;
 
+		HandleCollisions(_allPods);
 		ApplyRotation(target);
 		ApplyThrust(thrust, target, _checkpoints);
 		ApplyMovement(target);
+		//HandleShield(_allPods);
 		UpdateNextCheckpoint(_checkpoints);
 	}
 
 	void Output(vector<Checkpoint*> _checkpoints)
 	{
-		cout << _checkpoints[nextCheckpointId]->position.x << " " << _checkpoints[nextCheckpointId]->position.y << " " << thrust << endl;
+		if(this->haveShield)
+			cout << _checkpoints[nextCheckpointId]->position.x << " " << _checkpoints[nextCheckpointId]->position.y << " SHIELD" << endl;
+		else
+			cout << _checkpoints[nextCheckpointId]->position.x << " " << _checkpoints[nextCheckpointId]->position.y << " " << thrust << endl;
+	}
+
+	bool CheckCollisionWithPod(Pod* _otherPod)
+	{
+		float distance = Distance(this->position, _otherPod->position);
+		float collisionRadius = this->radius + _otherPod->radius +30;
+
+		if (distance <= collisionRadius) //means they are currently colliding;
+		{
+			return true;
+		}
+
+	}
+
+	void ApplyBounce(Pod* _otherPod)
+	{
+		float m1 = this->haveShield ? 10 : 1; // mass of thi pod
+		float m2 = _otherPod->haveShield ? 10 : 1; // mass of other pod
+
+		// Momentum conservation formula  : m1.v1 + m2.v2 = m1.v1' + m2.v2'
+		// where v1' and v2' are velocity after impact
+		// Here we know v1 and v2 and search for v1' and v2' ===> v1' = v1 * (m1-m2)/(m1+m2) +  v2 * 2*m2/(m1+m2)
+
+		Vector2 finalVelocity1 = this->velocity*((m1 - m2) / (m1 + m2)) + _otherPod->velocity*(2 * m2 / (m1 + m2));
+		Vector2 finalVelocity2 = this->velocity*(2 * m1 / (m1 + m2)) + _otherPod->velocity * ((m2 - m1) / (m1 + m2));
+
+		// Know we compute impulse forces
+		// F = mass * deltaVelocity / t		but here t=1
+		Vector2 impulseForce1 = (this->velocity - finalVelocity1) * m1;
+		Vector2 impulseForce2 = (_otherPod->velocity - finalVelocity2) * m2;
+
+		//If impact norm < 120 we normalize it to 120
+		if (Length(impulseForce1) < 120)
+			impulseForce1 = Normalize(impulseForce1) * 120;
+
+		if (Length(impulseForce2) < 120)
+			impulseForce2 = Normalize(impulseForce2) * 120;
+
+		// Then we apply impact forces to both velocities
+		this->velocity = this->velocity + impulseForce1;
+		_otherPod->velocity = _otherPod->velocity + impulseForce2;
+	}
+
+	void HandleCollisions(vector<Pod*> _allPods)
+	{
+		for (int i = 0; i < _allPods.size(); ++i)
+		{
+			if (_allPods[i] == this) // ignore self
+				return;
+
+			if (CheckCollisionWithPod(_allPods[i]))
+			{
+				cerr << "Collision with other pod !" << endl;
+				//if (i >= 2) // means collision with opponent
+				//{
+				//	cerr << "Collision with opponent !" << endl;
+				//	this->haveShield = true;
+				//}
+				ApplyBounce(_allPods[i]);
+			}
+		}
+	}
+
+	void HandleShield(vector<Pod*> _allPods)
+	{
+		Vector2 futurePos = this->position + this->velocity;
+
+		// We check if a collision will occur in next turn with ennemy pod
+		for (int i = 2; i < _allPods.size(); i++)
+		{
+			Vector2 futureOpponentPos = _allPods[i]->position + _allPods[i]->velocity;
+			if (Distance(futurePos, futureOpponentPos) < this->radius * 2) // *2 because all pods have same radius
+			{
+				cerr << "collision with opponent in next turn at : " << futurePos.x << " " << futurePos.y << endl;
+				this->haveShield = true;
+				return;
+			}
+		}
+
+		haveShield = false;
 	}
 };
 
@@ -215,10 +292,9 @@ int main()
     cin >> checkpointCount; cin.ignore();
 
 	vector<Checkpoint*> checkPointArray;
-	Pod* pod1;
-	Pod* pod2;
-	Pod* opponent1;
-	Pod* opponent2;
+	vector<Pod*> playerPods;
+	vector<Pod*> opponentPods;
+	vector<Pod*> allPods;
 
     for (int i = 0; i < checkpointCount; i++) {
         int checkpointX;
@@ -238,10 +314,7 @@ int main()
             int nextCheckPointId; // next check point id of your pod
             cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
 
-			if (i == 0)
-				pod1 = new Pod(x, y, vx, vy, angle, nextCheckPointId, pod2);
-			else
-				pod2 = new Pod(x, y, vx, vy, angle, nextCheckPointId, pod1);
+			allPods.push_back(new Pod(x, y, vx, vy, angle, nextCheckPointId));
         }
         for (int i = 0; i < 2; i++) {
             int x2; // x position of the opponent's pod
@@ -252,10 +325,7 @@ int main()
             int nextCheckPointId2; // next check point id of the opponent's pod
             cin >> x2 >> y2 >> vx2 >> vy2 >> angle2 >> nextCheckPointId2; cin.ignore();
 
-			if(i==0)
-				opponent1 = new Pod(x2, y2, vx2, vy2, angle2, nextCheckPointId2, opponent2);
-			else
-				opponent2 = new Pod(x2, y2, vx2, vy2, angle2, nextCheckPointId2, opponent1);
+			allPods.push_back(new Pod(x2, y2, vx2, vy2, angle2, nextCheckPointId2));
         }
 
         // Write an action using cout. DON'T FORGET THE "<< endl"
@@ -267,13 +337,15 @@ int main()
         // i.e.: "x y thrust"
         //cout << "8000 4500 100" << endl;
         //cout << "8000 4500 100" << endl;
-		pod1->Play(checkPointArray);
-		pod2->Play(checkPointArray);
+		for (int i = 0; i < 2; i++)
+		{
+			allPods[i]->Play(checkPointArray, allPods);
+			allPods[i]->Output(checkPointArray);
+		}
 
-		pod1->Output(checkPointArray);
-		pod2->Output(checkPointArray);
-
-		delete pod1;
-		delete pod2;
+		//for (int i = 0; i < allPods.size(); i++)
+		//{
+		//	delete allPods[i];
+		//}
     }
 }
